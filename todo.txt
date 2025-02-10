@@ -1,0 +1,273 @@
+import sqlite3
+import tkinter as tk
+from tkinter import messagebox
+from tkcalendar import Calendar
+import threading
+import time
+from plyer import notification
+from tkinter import ttk  # Import for using Treeview
+from datetime import datetime  # Import for date comparisons
+
+# task_manager.py
+def run_task_manager():
+    return "Task Manager is running!"
+
+# Database setup
+def init_db():
+    conn = sqlite3.connect('tasks.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS tasks
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  task_name TEXT, 
+                  stakeholder TEXT, 
+                  due_date TEXT, 
+                  status TEXT)''')
+    conn.commit()
+    conn.close()
+
+# Insert task into database
+def insert_task(task_name, stakeholder, due_date, status):
+    conn = sqlite3.connect('tasks.db')
+    c = conn.cursor()
+    c.execute("INSERT INTO tasks (task_name, stakeholder, due_date, status) VALUES (?, ?, ?, ?)",
+              (task_name, stakeholder, due_date, status))
+    conn.commit()
+    conn.close()
+
+# Fetch tasks from database (with not completed tasks first)
+def fetch_tasks():
+    conn = sqlite3.connect('tasks.db')
+    c = conn.cursor()
+    # Fetch tasks and order by 'status', prioritizing 'no' (not completed) tasks
+    c.execute("SELECT * FROM tasks ORDER BY CASE WHEN status = 'no' THEN 0 ELSE 1 END, due_date")
+    tasks = c.fetchall()
+    conn.close()
+    return tasks
+
+# Fetch total task count and completed task count
+def fetch_task_completion_stats():
+    conn = sqlite3.connect('tasks.db')
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM tasks")  # Total tasks
+    total_tasks = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM tasks WHERE status = 'yes'")  # Completed tasks
+    completed_tasks = c.fetchone()[0]
+    conn.close()
+
+    return total_tasks, completed_tasks
+
+# Update task in database
+def update_task(task_id, task_name, stakeholder, due_date, status):
+    conn = sqlite3.connect('tasks.db')
+    c = conn.cursor()
+    c.execute("UPDATE tasks SET task_name = ?, stakeholder = ?, due_date = ?, status = ? WHERE id = ?",
+              (task_name, stakeholder, due_date, status, task_id))
+    conn.commit()
+    conn.close()
+
+# Delete task from database
+def delete_task(task_id):
+    conn = sqlite3.connect('tasks.db')
+    c = conn.cursor()
+    c.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+    conn.commit()
+    conn.close()
+
+# GUI to manage tasks
+class TaskManagerApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Task Manager")
+        self.root.geometry("750x500")
+
+        # Modernize the style
+        style = ttk.Style()
+        style.theme_use("clam")  # Clam style for a smooth, modern look
+        style.configure("TButton", font=("Helvetica", 12, "bold"), padding=5)
+        style.configure("Treeview.Heading", font=("Arial", 14, "bold"), foreground="blue")  # Header style
+        style.configure("TLabel", font=("Helvetica", 12))
+
+        # Add header label
+        self.header_label = tk.Label(root, text="Your TO DO List", font=("Helvetica", 16, "bold"))
+        self.header_label.pack(pady=(10, 0))
+
+        self.status = tk.StringVar()
+
+        # Input form in left-to-right layout
+        input_frame = tk.Frame(root, pady=10)
+        input_frame.pack(fill=tk.X, padx=10)
+
+        # Task Name
+        tk.Label(input_frame, text="Task Name:").grid(row=0, column=0, padx=5)
+        self.task_name_text = tk.Text(input_frame, width=15, height=3)  # Increased height
+        self.task_name_text.grid(row=1, column=0, padx=5)
+
+        # Stakeholder
+        tk.Label(input_frame, text="Stakeholder:").grid(row=0, column=1, padx=5)
+        self.stakeholder_text = tk.Text(input_frame, width=15, height=3)  # Increased height
+        self.stakeholder_text.grid(row=1, column=1, padx=5)
+
+        # Due Date Calendar
+        tk.Label(input_frame, text="Due Date:").grid(row=0, column=2, padx=5)
+        self.cal = Calendar(input_frame, selectmode='day', date_pattern="yyyy-mm-dd")
+        self.cal.grid(row=1, column=2, padx=5)
+
+        # Completion Status with Yes/No buttons
+        tk.Label(input_frame, text="Completed Status:").grid(row=0, column=3, padx=5)
+        button_frame = tk.Frame(input_frame)
+        button_frame.grid(row=1, column=3, padx=5)
+        self.yes_button = tk.Button(button_frame, text="Yes", command=lambda: self.set_status("yes"))
+        self.yes_button.pack(side=tk.LEFT)
+        self.no_button = tk.Button(button_frame, text="No", command=lambda: self.set_status("no"))
+        self.no_button.pack(side=tk.RIGHT)
+
+        # Action Buttons (Add, Edit, Delete)
+        self.submit_button = tk.Button(input_frame, text="Add Task", command=self.add_task, width=10)
+        self.submit_button.grid(row=1, column=4, padx=5)
+
+        self.edit_button = tk.Button(input_frame, text="Edit Task", command=self.load_task_for_editing, width=10)
+        self.edit_button.grid(row=1, column=5, padx=5)
+
+        self.delete_button = tk.Button(input_frame, text="Delete Task", command=self.delete_selected_task, width=10)
+        self.delete_button.grid(row=1, column=6, padx=5)
+
+        # Task List with Completion Status label
+        self.completion_percentage_label = tk.Label(root, text="Task List Completion Status: 0%",
+                                                    font=("Arial", 14, "bold"), bg="lightgrey", pady=5)
+        self.completion_percentage_label.pack(fill=tk.X, pady=(10, 0))
+
+        # Task Table
+        columns = ("ID", "Task Name", "Stakeholder", "Due Date", "Completed")
+        self.task_table = ttk.Treeview(root, columns=columns, show="headings", height=12)
+        self.task_table.pack(fill=tk.BOTH, expand=1, padx=10, pady=(0, 10))
+
+        self.task_table.heading("ID", text="ID")
+        self.task_table.heading("Task Name", text="Task Name")
+        self.task_table.heading("Stakeholder", text="Stakeholder")
+        self.task_table.heading("Due Date", text="Due Date")
+        self.task_table.heading("Completed", text="Completed")
+
+        self.task_table.column("ID", width=30, anchor=tk.CENTER)
+        self.task_table.column("Task Name", width=150, anchor=tk.W)
+        self.task_table.column("Stakeholder", width=120, anchor=tk.W)
+        self.task_table.column("Due Date", width=100, anchor=tk.CENTER)
+        self.task_table.column("Completed", width=80, anchor=tk.CENTER)
+
+        # Load tasks and update completion percentage
+        self.load_tasks()
+        self.update_completion_percentage()
+        self.selected_task_id = None  # To store the ID of the task being edited
+
+    # Set the status using the Yes/No buttons
+    def set_status(self, status_value):
+        self.status.set(status_value)
+
+    # Add new task to the database
+    def add_task(self):
+        task_name = self.task_name_text.get("1.0", tk.END).strip()
+        stakeholder = self.stakeholder_text.get("1.0", tk.END).strip()
+        due_date = self.cal.get_date()
+        status = self.status.get()
+
+        if task_name and stakeholder and due_date and status:
+            if self.selected_task_id is None:  # If no task is being edited, add a new one
+                insert_task(task_name, stakeholder, due_date, status)
+            else:  # If editing, update the existing task
+                update_task(self.selected_task_id, task_name, stakeholder, due_date, status)
+                self.selected_task_id = None  # Reset after editing
+
+            self.clear_fields()
+            self.load_tasks()
+            self.update_completion_percentage()  # Update completion percentage after adding a task
+        else:
+            messagebox.showwarning("Input Error", "All fields are required")
+
+    # Clear input fields after submission
+    def clear_fields(self):
+        self.task_name_text.delete("1.0", tk.END)
+        self.stakeholder_text.delete("1.0", tk.END)
+        self.status.set("")  # Clear status
+
+    # Load tasks from database into Treeview
+    def load_tasks(self):
+        # Clear existing tasks in the table
+        for row in self.task_table.get_children():
+            self.task_table.delete(row)
+
+        tasks = fetch_tasks()
+        today = datetime.now().date()  # Get today's date
+
+        for task in tasks:
+            task_due_date = datetime.strptime(task[3], "%Y-%m-%d").date()  # Convert due_date to date object
+            tag = 'not_completed'  # Default tag for not completed tasks
+
+            # Check if the task is completed
+            if task[4].lower() == 'yes':  # If task is completed
+                tag = 'completed'  # Change tag to completed
+            elif task_due_date < today and task[4].lower() != 'yes':  # If due date is past and not completed
+                tag = 'overdue'  # Change tag to overdue
+
+            self.task_table.insert("", tk.END, values=task, tags=(tag,))
+
+        # Configure tag colors
+        self.task_table.tag_configure('completed', background='lightgreen')  # For completed tasks
+        self.task_table.tag_configure('not_completed', background='lightyellow')  # For not completed tasks
+        self.task_table.tag_configure('overdue', background='red')  # For overdue tasks
+
+    # Load selected task into input fields for editing
+    def load_task_for_editing(self):
+        selected_item = self.task_table.selection()
+        if selected_item:
+            self.selected_task_id = self.task_table.item(selected_item)["values"][0]  # Get task ID
+            self.task_name_text.delete("1.0", tk.END)
+            self.stakeholder_text.delete("1.0", tk.END)
+            task_values = self.task_table.item(selected_item)["values"]
+            self.task_name_text.insert("1.0", task_values[1])  # Task Name
+            self.stakeholder_text.insert("1.0", task_values[2])  # Stakeholder
+            self.cal.selection_set(task_values[3])  # Due Date
+            self.status.set(task_values[4])  # Status
+
+    # Delete selected task from database
+    def delete_selected_task(self):
+        selected_item = self.task_table.selection()
+        if selected_item:
+            task_id = self.task_table.item(selected_item)["values"][0]
+            delete_task(task_id)
+            self.load_tasks()  # Reload tasks after deletion
+            self.update_completion_percentage()  # Update completion percentage after deletion
+
+    # Update completion percentage display
+    def update_completion_percentage(self):
+        total_tasks, completed_tasks = fetch_task_completion_stats()
+        completion_percentage = (completed_tasks / total_tasks * 100) if total_tasks else 0
+        self.completion_percentage_label.config(text=f"Task List Completion Status: {completion_percentage:.2f}%")
+
+        # Optional: Notify when tasks are completed
+        if completed_tasks == total_tasks and total_tasks > 0:
+            self.send_notification("All tasks completed!", "Great job on finishing all tasks!")
+
+    # Send a notification using plyer
+    def send_notification(self, title, message):
+        notification.notify(
+            title=title,
+            message=message,
+            app_name="Task Manager",
+            timeout=10
+        )
+
+
+# Run the application
+if __name__ == "__main__":
+    init_db()
+    root = tk.Tk()
+    app = TaskManagerApp(root)
+
+    # Start a background thread for notifications
+    def notification_thread():
+        while True:
+            time.sleep(60)  # Check every minute
+            app.update_completion_percentage()
+
+    threading.Thread(target=notification_thread, daemon=True).start()
+    root.mainloop()
