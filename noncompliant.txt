@@ -1,0 +1,58 @@
+import pandas as pd
+import tkinter as tk
+from tkinter import simpledialog
+from tkcalendar import Calendar
+
+
+def verify_entries(dda_file, analysis_file, date_to_check):
+    try:
+        # Load Excel files
+        dda_df = pd.read_excel(dda_file)
+        analysis_df = pd.read_excel(analysis_file)
+
+        # Validate necessary columns
+        if not {'Member', 'Day'}.issubset(dda_df.columns):
+            raise ValueError("The 'dda' file must contain 'Member' and 'Date' columns.")
+        if 'Member' not in analysis_df.columns:
+            raise ValueError("The 'DDA Analysis Data' file must contain a 'Member' column.")
+
+        # Filter data for the specified date
+        dda_df['Day'] = pd.to_datetime(dda_df['Day']).dt.date
+        date_to_check = pd.to_datetime(date_to_check).date()
+
+        entries_on_date = dda_df[dda_df['Day'] == date_to_check]['Member'].unique()
+        expected_members = set(analysis_df['Member'].unique())
+
+        # Find members who did not make an entry
+        missing_members = expected_members - set(entries_on_date)
+
+        print(f"Members who did not make entries on {date_to_check}:")
+        for member in missing_members:
+            print(member)
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+
+def select_date():
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+    calendar_window = tk.Toplevel(root)
+    calendar_window.title("Select a Date")
+    cal = Calendar(calendar_window, selectmode='day')
+    cal.pack(pady=20)
+
+    def get_date():
+        selected_date = cal.get_date()
+        calendar_window.destroy()
+        root.destroy()
+        verify_entries('dda.xlsx', 'DDA Analysis Data.xlsx', selected_date)
+
+    submit_btn = tk.Button(calendar_window, text="Submit", command=get_date)
+    submit_btn.pack(pady=20)
+
+    calendar_window.mainloop()
+
+
+# Example usage
+select_date()
